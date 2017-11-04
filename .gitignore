@@ -1,11 +1,6 @@
 # compiled mex files
 minFunc/compiled/
 
-# example files
-example_derivativeCheck.m
-example_minFunc.m
-logisticExample/
-
 # Windows image file caches
 Thumbs.db
 ehthumbs.db
