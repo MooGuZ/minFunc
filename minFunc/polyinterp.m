@@ -63,6 +63,7 @@ if nPoints == 2 && order ==3 && doPlot == 0
     %     minPos = (xmaxBound+xminBound)/2;
     % end
     % <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+    temp = d1^2 - points(minPos,3)*points(notMinPos,3);
     if temp < 0
         minPos = (xmaxBound+xminBound)/2;
     else
