@@ -44,47 +44,85 @@ if nPoints == 2 && order ==3 && doPlot == 0
     %    d2 = sqrt(d1^2 - g1*g2);
     %    minPos = x2 - (x2 - x1)*((g2 + d2 - d1)/(g2 - g1 + 2*d2));
     %    t_new = min(max(minPos,x1),x2);
-    [minVal minPos] = min(points(:,1));
+    [~, minPos] = min(points(:,1));
     notMinPos = -minPos+3;
     d1 = points(minPos,3) + points(notMinPos,3) - 3*(points(minPos,2)-points(notMinPos,2))/(points(minPos,1)-points(notMinPos,1));
-    d2 = sqrt(d1^2 - points(minPos,3)*points(notMinPos,3));
-    if isreal(d2)
-        t = points(notMinPos,1) - (points(notMinPos,1) - points(minPos,1))*((points(notMinPos,3) + d2 - d1)/(points(notMinPos,3) - points(minPos,3) + 2*d2));
-        minPos = min(max(t,xminBound),xmaxBound);
-    else
+    % ================================================================================
+    % Original implementation which would cause error on GPU saying :
+    % | SQRT: needs to return a complex result, but this is not supported for real
+    % | input X on GPU. Use SQRT(COMPLEX(X)) instead.
+    % This is because MATLAB use a very strict type system on GPU. If need return a
+    % complex number, input has to be a complex number. My solution is check the
+    % value first and do SQRT only when necessary to avoid this limit.
+    % >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+    % d2 = sqrt(d1^2 - points(minPos,3)*points(notMinPos,3));
+    % if isreal(d2)
+    %     t = points(notMinPos,1) - (points(notMinPos,1) - points(minPos,1))*((points(notMinPos,3) + d2 - d1)/(points(notMinPos,3) - points(minPos,3) + 2*d2));
+    %     minPos = min(max(t,xminBound),xmaxBound);
+    % else
+    %     minPos = (xmaxBound+xminBound)/2;
+    % end
+    % <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+    if temp < 0
         minPos = (xmaxBound+xminBound)/2;
+    else
+        d2 = sqrt(temp);
+        t  = points(notMinPos,1) - (points(notMinPos,1) - points(minPos,1))*((points(notMinPos,3) + d2 - d1)/(points(notMinPos,3) - points(minPos,3) + 2*d2));
+        minPos = min(max(t,xminBound),xmaxBound);
     end
+    % ================================================================================
     return;
 end
 
-% Constraints Based on available Function Values
-A = zeros(0,order+1);
-b = zeros(0,1);
-for i = 1:nPoints
-    if imag(points(i,2))==0
-        constraint = zeros(1,order+1);
-        for j = order:-1:0
-            constraint(order-j+1) = points(i,1)^j;
-        end
-        A = [A;constraint];
-        b = [b;points(i,2)];
-    end
-end
-
-% Constraints based on available Derivatives
-for i = 1:nPoints
-    if isreal(points(i,3))
-        constraint = zeros(1,order+1);
-        for j = 1:order
-            constraint(j) = (order-j+1)*points(i,1)^(order-j);
-        end
-        A = [A;constraint];
-        b = [b;points(i,3)];
-    end
-end
+% ================================================================================
+% Original implementation has a waring that 'A' and 'b' increases their size in 
+% loop. This is a common one. I replace it with a vectorized solution.
+% >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+% % Constraints Based on available Function Values
+% A = zeros(0,order+1);
+% b = zeros(0,1);
+% for i = 1:nPoints
+%     if imag(points(i,2))==0
+%         constraint = zeros(1,order+1);
+%         for j = order:-1:0
+%             constraint(order-j+1) = points(i,1)^j;
+%         end
+%         A = [A;constraint];
+%         b = [b;points(i,2)];
+%     end
+% end
+% 
+% % Constraints based on available Derivatives
+% for i = 1:nPoints
+%     if isreal(points(i,3))
+%         constraint = zeros(1,order+1);
+%         for j = 1:order
+%             constraint(j) = (order-j+1)*points(i,1)^(order-j);
+%         end
+%         A = [A;constraint];
+%         b = [b;points(i,3)];
+%     end
+% end
+% <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+% get indexes of constrain functions
+iFvalConstrain = (imag(points(:, 2)) == 0);
+iDervConstrain = arrayfun(@isreal, points(:, 3));
+% calculate constrain parameters for function value part
+Afval = repmat(points(iFvalConstrain, 1), [1, order+1]);
+Afval = bsxfun(@power, Afval, order:-1:0);
+% cacluate constrain parameters for derivatives
+Aderv = repmat(points(iDervConstrain, 1), [1 , order]);
+Aderv = bsxfun(@power, Aderv, order-1:-1:0);
+Aderv = bsxfun(@times, Aderv, order:-1:1);
+Aderv = [Aderv, zeros(size(Aderv, 1), 1)];
+% compose constrain parameters
+A = [Afval; Aderv];
+% compose constrain functions' value
+b = [points(iFvalConstrain, 2); points(iDervConstrain, 3)];
+% ================================================================================
 
 % Find interpolating polynomial
-[params,ignore] = linsolve(A,b);
+[params, ~] = linsolve(A,b);
 
 % Compute Critical Points
 dParams = zeros(order,1);
@@ -130,11 +168,12 @@ if doPlot
 
     % Plot Function
     x = min(xmin,xminBound)-.1:(max(xmax,xmaxBound)+.1-min(xmin,xminBound)+.1)/100:max(xmax,xmaxBound)+.1;
+    f = zeros(size(x));
     for i = 1:length(x)
         f(i) = polyval(params,x(i));
     end
     plot(x,f,'y');
-    axis([x(1)-.1 x(end)+.1 min(f)-.1 max(f)+.1]);
+    axis([x(1)-.1, x(end)+.1, min(f)-.1, max(f)+.1]);
 
     % Plot Minimum
     plot(minPos,fmin,'g+');
